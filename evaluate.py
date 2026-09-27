@@ -9,7 +9,7 @@ from PIL import Image
 import torch
 from transformers import CLIPImageProcessor, CLIPTextModelWithProjection, CLIPTokenizer, CLIPVisionModelWithProjection
 
-from lincir_core import Phi, encode_pseudo, cirr_metrics
+from lincir_core import Phi, encode_pseudo, cirr_metrics, placeholder_token_id
 from train import MODEL
 
 
@@ -36,6 +36,7 @@ def run(args):
     state = torch.load(args.checkpoint, map_location='cpu', weights_only=True)
     model_name = state.get('model', MODEL)
     tokenizer = CLIPTokenizer.from_pretrained(model_name)
+    placeholder = placeholder_token_id(tokenizer)
     processor = CLIPImageProcessor.from_pretrained(model_name)
     image_encoder = CLIPVisionModelWithProjection.from_pretrained(model_name).to(device).eval()
     start = time.perf_counter()
@@ -58,9 +59,6 @@ def run(args):
               text_encoder.config.hidden_size, 0.5).to(device).eval()
     phi.load_state_dict(state['Phi'])
     lookup = {name: i for i, name in enumerate(names)}
-    placeholder = tokenizer.encode('$', add_special_tokens=False)
-    if len(placeholder) != 1:
-        raise ValueError('Tokenizer must represent $ as one token.')
     queries = []
     for offset in range(0, len(records), args.batch_size):
         batch = records[offset:offset + args.batch_size]
@@ -68,7 +66,7 @@ def run(args):
         prompts = ['a photo of $ that ' + r['caption'].replace('$', '') for r in batch]
         ids = tokenizer(prompts, padding='max_length', truncation=True,
                         max_length=text_encoder.config.max_position_embeddings, return_tensors='pt').input_ids.to(device)
-        queries.append(encode_pseudo(text_encoder, ids, phi(refs), placeholder[0]).float().cpu())
+        queries.append(encode_pseudo(text_encoder, ids, phi(refs), placeholder).float().cpu())
     metrics = cirr_metrics(torch.cat(queries), gallery, names, records, args.batch_size)
     with Path(args.checkpoint).open('rb') as stream:
         checkpoint_sha256 = hashlib.file_digest(stream, 'sha256').hexdigest()

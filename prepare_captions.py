@@ -6,6 +6,7 @@ import random
 from pathlib import Path
 
 from transformers import CLIPTokenizer
+from lincir_core import placeholder_token_id
 
 SOURCES = ['dangne/gcc_caption_only', 'FredZhang7/stable-diffusion-prompts-2.47M']
 
@@ -48,6 +49,7 @@ def main():
     import spacy
     nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner', 'lemmatizer'])
     tokenizer = CLIPTokenizer.from_pretrained('openai/clip-vit-large-patch14')
+    placeholder_token_id(tokenizer)
     sources = [args.input] if args.input else SOURCES
     seen, examples, counts = set(), [], {}
     for source in sources:
@@ -84,8 +86,10 @@ def main():
     with output.open('w', encoding='utf-8') as stream:
         for example in examples:
             stream.write(json.dumps(example, ensure_ascii=False) + '\n')
+    with output.open('rb') as stream:
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     metadata = {**vars(args), 'counts': counts, 'total': len(examples),
-                'sha256': hashlib.file_digest(output.open('rb'), 'sha256').hexdigest(),
+                'sha256': digest,
                 'spacy': spacy.__version__, 'pos_model': nlp.meta['version'],
                 'note': 'Pilot subset, deduplicated; not full paper training data.'}
     output.with_suffix('.meta.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')

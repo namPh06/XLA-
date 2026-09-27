@@ -11,6 +11,7 @@ from transformers import CLIPConfig, CLIPModel, CLIPTokenizer, CLIPImageProcesso
 
 import evaluate
 import train
+from lincir_core import placeholder_token_id
 
 
 def main():
@@ -22,15 +23,29 @@ def main():
         model_dir = root / 'tiny-clip'
         model_dir.mkdir()
         chars = list(string.ascii_lowercase + '$.,')
-        tokens = chars + [c + '</w>' for c in chars] + ['<|startoftext|>', '<|endoftext|>']
+        tokens = chars + [c + '</w>' for c in chars] + ['$.</w>', '<|startoftext|>', '<|endoftext|>']
         vocab = {token: index for index, token in enumerate(tokens)}
         (model_dir / 'vocab.json').write_text(json.dumps(vocab), encoding='utf-8')
-        (model_dir / 'merges.txt').write_text('#version: 0.2\n', encoding='utf-8')
+        (model_dir / 'merges.txt').write_text('#version: 0.2\n$ .</w>\n', encoding='utf-8')
         # Positional paths work with both Transformers 4 (vocab_file/merges_file)
         # and Transformers 5 (vocab/merges).
         tokenizer = CLIPTokenizer(str(model_dir / 'vocab.json'),
                                   str(model_dir / 'merges.txt'), model_max_length=77)
         tokenizer.save_pretrained(model_dir)
+        placeholder = placeholder_token_id(tokenizer)
+        assert placeholder not in tokenizer.encode('$.', add_special_tokens=False)
+        punctuation = root / 'punctuation.jsonl'
+        punctuation.write_text(json.dumps({'caption': 'a cat and a dog.', 'masked': '$ and $.'}), encoding='utf-8')
+        _, masked = train.load_tokens(punctuation, tokenizer, 77)
+        assert masked.eq(placeholder).sum().item() == 2
+        for invalid in [[], {'caption': 'cat', 'masked': 'x ' * 100 + '$'}]:
+            punctuation.write_text(json.dumps(invalid), encoding='utf-8')
+            try:
+                train.load_tokens(punctuation, tokenizer, 77)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('Invalid/truncated masked row accepted')
         config = CLIPConfig(projection_dim=8, text_config=dict(
             vocab_size=len(vocab), hidden_size=16, intermediate_size=32,
             num_hidden_layers=1, num_attention_heads=2, projection_dim=8,

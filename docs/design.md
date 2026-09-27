@@ -19,8 +19,9 @@ Môi trường đã chọn: Colab/Kaggle; máy Windows dùng kiểm tra chức n
    Đây là giả thuyết cải tiến, chưa phải kết quả hay tuyên bố tính mới toàn ngành.
 6. Đánh giá CIRR validation bằng gallery đầy đủ, loại ảnh tham chiếu,
    R@1/5/10/50 và subset R@1/2/3. Không bỏ qua ảnh thiếu/hỏng.
-7. Notebook Colab/Kaggle thực hiện chuẩn bị dữ liệu, huấn luyện hai biến thể,
-   đánh giá và xuất kết quả. Không tạo web app hoặc hệ thống dịch vụ.
+7. Notebook Colab chạy baseline chính thức, huấn luyện toàn bộ caption,
+   đánh giá dev và xuất CIRR test. Hai biến thể pilot chạy bằng script riêng;
+   chưa có kết quả so sánh. Không tạo web app hoặc hệ thống dịch vụ.
 
 ## Thực nghiệm và giới hạn
 

@@ -26,6 +26,8 @@ CLIP_REVISION = '32bd64288804d66eefd0ccbe215aa642df71cc41'
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', default='output/baseline/pretrained_smoke.json')
+    parser.add_argument('--local-files-only', action='store_true', help='Use already downloaded model files.')
+    parser.add_argument('--check-upstream', action='store_true', help='Compare the patched official encoder (Transformers 4.57.6).')
     args = parser.parse_args()
     output = Path(args.output)
     if output.exists():
@@ -35,14 +37,14 @@ def main():
         raise FileNotFoundError('Run git submodule update --init --recursive first.')
     checkpoint = Path(hf_hub_download(
         'navervision/zeroshot-cir-models', 'lincir_large.pt', revision=PHI_REVISION,
-        local_dir='output/baseline/checkpoint'))
+        local_dir='output/baseline/checkpoint', local_files_only=args.local_files_only))
     with checkpoint.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     assert digest == PHI_SHA256, 'Published checkpoint checksum mismatch'
     model = snapshot_download(
         'openai/clip-vit-large-patch14', revision=CLIP_REVISION,
         allow_patterns=['*.json', 'merges.txt', 'vocab.json', 'model.safetensors'],
-        local_dir='output/baseline/clip-vit-large-patch14')
+        local_dir='output/baseline/clip-vit-large-patch14', local_files_only=args.local_files_only)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     torch.set_num_threads(4)
     start = time.perf_counter()
@@ -64,6 +66,26 @@ def main():
     assert tokenizer.encode('$', add_special_tokens=False) == [259]
     pseudo = phi(image_features).expand(len(prompts), -1)
     composed = encode_pseudo(text, ids, pseudo)
+    upstream_error = None
+    if args.check_upstream:
+        import shutil
+        import tempfile
+        from test_upstream import functions_only
+        assert transformers.__version__ == '4.57.6'
+        notebook = json.loads(Path('notebooks/LinCIR_Colab.ipynb').read_text(encoding='utf-8'))
+        patch = next(''.join(cell['source']) for cell in notebook['cells']
+                     if 'def patch_upstream(' in ''.join(cell.get('source', [])))
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            for filename in ['train_phi.py', 'loader.py', 'data_utils.py',
+                             'encode_with_pseudo_tokens.py', 'generate_test_submission.py']:
+                shutil.copyfile(Path('third_party/lincir') / filename, work / filename)
+            exec(patch, {'WORK': work})
+            namespace = {'torch': torch, 'CLIPTextModelWithProjection': CLIPTextModelWithProjection}
+            functions_only(work / 'encode_with_pseudo_tokens.py', namespace)
+            official = namespace['encode_with_pseudo_tokens_HF'](text, ids, pseudo)
+        torch.testing.assert_close(composed, official, rtol=1e-4, atol=1e-4)
+        upstream_error = (composed - official).abs().max().item()
     assert image_features.shape == (1, 768) and pseudo.shape == (2, 768) and composed.shape == (2, 768)
     assert all(torch.isfinite(t).all() for t in (image_features, pseudo, composed))
     difference = (composed[0] - composed[1]).norm().item()
@@ -77,9 +99,10 @@ def main():
         'prompts': prompts, 'image_shape': list(image_features.shape),
         'pseudo_shape': list(pseudo.shape), 'composed_shape': list(composed.shape),
         'prompt_output_l2_difference': difference,
+        'patched_upstream_max_abs_difference': upstream_error,
         'device': str(device), 'torch': str(torch.__version__), 'transformers': transformers.__version__,
         'elapsed_seconds': time.perf_counter() - start,
-        'note': 'Official Phi weights with project encode_pseudo; inference only. No CIRR metrics or training reproduction.',
+        'note': 'Official Phi weights, project encoder and optional patched upstream comparison. Inference only; no CIRR metrics or training reproduction.',
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2), encoding='utf-8')

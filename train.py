@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer
 import transformers
 
-from lincir_core import Phi, encode_pseudo, smp_loss
+from lincir_core import Phi, encode_pseudo, smp_loss, placeholder_token_id
 
 MODEL = 'openai/clip-vit-large-patch14'
 
@@ -22,7 +22,7 @@ def load_tokens(path, tokenizer, max_length):
     records = [json.loads(line) for line in Path(path).read_text(encoding='utf-8').splitlines() if line.strip()]
     if not records:
         raise ValueError('Caption file is empty.')
-    if any(not isinstance(r.get('caption'), str) or not r['caption'].strip()
+    if any(not isinstance(r, dict) or not isinstance(r.get('caption'), str) or not r['caption'].strip()
            or not isinstance(r.get('masked'), str) or '$' not in r['masked'] for r in records):
         raise ValueError('Each JSONL row needs a nonempty caption and masked text containing $.')
     captions = [r['caption'] for r in records]
@@ -32,7 +32,11 @@ def load_tokens(path, tokenizer, max_length):
         raise ValueError('Original captions must not contain the pseudo-token $.')
     options = dict(padding='max_length', truncation=True, max_length=max_length, return_tensors='pt')
     original = tokenizer(captions, **options).input_ids
-    masked = tokenizer([r['masked'] for r in records], **options).input_ids
+    # CLIP BPE can merge '$.' into one different token. Separate every placeholder.
+    masked = tokenizer([r['masked'].replace('$', ' $ ') for r in records], **options).input_ids
+    counts = masked.eq(placeholder_token_id(tokenizer)).sum(dim=1)
+    if counts.tolist() != [r['masked'].count('$') for r in records]:
+        raise ValueError('A masked caption lost pseudo-tokens during tokenization/truncation.')
     return original, masked
 
 
@@ -56,9 +60,7 @@ def run(args):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
     tokenizer = CLIPTokenizer.from_pretrained(args.model)
-    placeholder = tokenizer.encode('$', add_special_tokens=False)
-    if len(placeholder) != 1:
-        raise ValueError('Tokenizer must represent $ as one token.')
+    placeholder = placeholder_token_id(tokenizer)
     encoder = CLIPTextModelWithProjection.from_pretrained(args.model).to(device).eval().requires_grad_(False)
     if args.gradient_checkpointing:
         encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
@@ -67,7 +69,7 @@ def run(args):
             raise ValueError('Checkpointing recipe requires CLIP attention_dropout=0.')
         encoder.train()
     original, masked = load_tokens(args.captions, tokenizer, encoder.config.max_position_embeddings)
-    if len(original) < args.batch_size or not masked.eq(placeholder[0]).any(dim=1).all():
+    if len(original) < args.batch_size:
         raise ValueError('Too few captions for a batch, or a masked caption lost its pseudo-token.')
     loader = DataLoader(TensorDataset(original, masked), batch_size=args.batch_size,
                         shuffle=True, drop_last=True, num_workers=0,
@@ -107,7 +109,7 @@ def run(args):
                 with torch.no_grad():
                     target = encoder(input_ids=ids).text_embeds
                     noisy = target.float() + torch.rand(len(ids), 1, device=device) * torch.randn(target.shape, device=device)
-                predicted = encode_pseudo(encoder, masked_ids, phi(noisy), placeholder[0])
+                predicted = encode_pseudo(encoder, masked_ids, phi(noisy), placeholder)
                 loss, mse, nce = smp_loss(predicted, target, args.contrastive_weight, args.temperature)
             if not torch.isfinite(loss):
                 raise FloatingPointError(f'Non-finite loss at step {step}.')

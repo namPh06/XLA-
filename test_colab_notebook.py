@@ -1,8 +1,12 @@
 """Small structural check for the hand-off Colab notebook."""
 import ast
 import json
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -65,4 +69,59 @@ with TemporaryDirectory() as directory:
     exec(readiness, namespace)
     assert namespace["CIRR_READY"] is False, "A partial query set is not a complete baseline"
 
-print("PASS: notebook syntax/flow; CIRR missing, complete, corrupt, and partial-data guards")
+    # Execute the optional test export cell, with only subprocess inference
+    # replaced by deterministic predictions. Check the actual output validation
+    # and Drive-copy path without requiring GPU, model downloads or CIRR images.
+    test_records = [dict(pairid=i, reference='0', img_set={'members': [str(j) for j in range(6)]})
+                    for i in range(4148)]
+    (captions.parent / 'cap.rc2.test1.json').write_text(json.dumps(test_records), encoding='utf-8')
+    (split.parent / 'split.rc2.test1.json').write_text(
+        json.dumps({str(i): 'dev/example.png' for i in range(2315)}), encoding='utf-8')
+    checkpoint = root / 'phi.pt'
+    checkpoint.touch()
+    def fake_inference(command, log_path):
+        destination = root / 'submission/cirr'
+        destination.mkdir(parents=True)
+        for prefix, metric, k in [('', 'recall', 50), ('subset_', 'recall_subset', 3)]:
+            result = dict(version='rc2', metric=metric)
+            result.update({str(i): [str(j) for j in range(1, k + 1)] for i in range(4148)})
+            (destination / f'{prefix}vit_l_official.json').write_text(json.dumps(result), encoding='utf-8')
+    namespace.update(WORK=root, CHECKPOINT=checkpoint, sys=sys, shutil=shutil,
+                     CACHE_DIR=root, run_logged=fake_inference, Path=Path)
+    export = next(''.join(cell['source']) for cell in cells
+                  if 'EXPORT_CIRR_TEST = False' in ''.join(cell.get('source', [])))
+    exec(export.replace('EXPORT_CIRR_TEST = False', 'EXPORT_CIRR_TEST = True'), namespace)
+    assert (root / 'submissions/vit_l_official/subset_vit_l_official.json').is_file()
+    try:
+        exec(export.replace('EXPORT_CIRR_TEST = False', 'EXPORT_CIRR_TEST = True'), namespace)
+    except FileExistsError:
+        pass
+    else:
+        raise AssertionError('Export overwrote an existing submission')
+
+    logging_cell = next(''.join(cell['source']) for cell in cells
+                        if 'def run_logged(' in ''.join(cell.get('source', [])))
+    tree = ast.parse(logging_cell)
+    tree.body = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+    namespace.update(subprocess=subprocess, UPSTREAM_COMMIT='test', gpu_name='CPU test', EFFECTIVE_BATCH_SIZE=4)
+    exec(compile(tree, 'notebook_logging', 'exec'), namespace)
+    with patch('importlib.metadata.version', return_value='test'):
+        run_logged = namespace['run_logged']
+        log = root / 'success.log'
+        run_logged([sys.executable, '-c', "print('completed')"], log)
+        assert 'completed' in log.read_text() and json.loads(log.with_suffix('.json').read_text())['returncode'] == 0
+        try:
+            run_logged([sys.executable, '-c', 'raise SystemExit(7)'], root / 'failure.log')
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError('Subprocess failure was hidden')
+        assert json.loads((root / 'failure.json').read_text())['returncode'] == 7
+        try:
+            run_logged([sys.executable, '-c', "print('overwritten')"], log)
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError('Experiment log was overwritten')
+
+print("PASS: notebook syntax/flow, CIRR guards, test export, streamed logs, subprocess failure and overwrite guards")

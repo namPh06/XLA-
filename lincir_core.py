@@ -7,6 +7,13 @@ import torch.nn.functional as F
 from third_party.lincir.models import Phi
 
 
+def placeholder_token_id(tokenizer):
+    ids = tokenizer.encode('$', add_special_tokens=False)
+    if len(ids) != 1 or ids[0] in tokenizer.all_special_ids:
+        raise ValueError('Invalid CLIP tokenizer: $ must be one non-special token. Check vocab/merges files.')
+    return ids[0]
+
+
 def encode_pseudo(encoder, input_ids, pseudo, placeholder_id=259):
     mask = input_ids.eq(placeholder_id)
     if not mask.any(dim=1).all():
@@ -26,6 +33,8 @@ def encode_pseudo(encoder, input_ids, pseudo, placeholder_id=259):
 def smp_loss(predicted, target, weight=0.0, temperature=0.07):
     if not math.isfinite(weight) or weight < 0 or not math.isfinite(temperature) or temperature <= 0:
         raise ValueError('Contrastive weight must be finite/nonnegative; temperature finite/positive.')
+    if predicted.ndim != 2 or predicted.shape != target.shape or not predicted.numel():
+        raise ValueError('SMP requires matching, nonempty 2D predicted and target features.')
     predicted, target = predicted.float(), target.detach().float()
     mse = F.mse_loss(predicted, target)
     contrastive = mse.new_zeros(())
