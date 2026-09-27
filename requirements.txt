@@ -1,0 +1,7 @@
+# Keep the CUDA-enabled torch supplied by Colab/Kaggle.
+torch>=2.3
+transformers>=4.44,<6
+datasets>=3,<5
+spacy>=3.8,<3.9
+Pillow>=10
+ftfy>=6
