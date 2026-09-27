@@ -1,0 +1,3 @@
+[submodule "third_party/lincir"]
+	path = third_party/lincir
+	url = https://github.com/navervision/lincir.git

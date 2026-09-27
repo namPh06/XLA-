@@ -1,0 +1,33 @@
+{
+  "status": "PASS",
+  "kind": "published_checkpoint_real_photo_smoke",
+  "timestamp_utc": "2026-09-27T04:13:35.950923+00:00",
+  "checkpoint_sha256": "5ba98d52db7a5e9a78f9ba7436991235477b89544caf246e4659642bf9b409bd",
+  "checkpoint_revision": "5118df4683de6efa09f8e5336d86ca626ed21c44",
+  "backbone": "openai/clip-vit-large-patch14",
+  "backbone_revision": "32bd64288804d66eefd0ccbe215aa642df71cc41",
+  "photo": "third_party/lincir/example1.jpg",
+  "photo_sha256": "10d3bb2ac2272577d1a2246aba1297c55bf1f34452c4462b504ed76d4ff39a01",
+  "prompts": [
+    "a photo of $ that is a pencil sketch",
+    "a photo of $ that is covered in snow"
+  ],
+  "image_shape": [
+    1,
+    768
+  ],
+  "pseudo_shape": [
+    2,
+    768
+  ],
+  "composed_shape": [
+    2,
+    768
+  ],
+  "prompt_output_l2_difference": 12.277158737182617,
+  "device": "cpu",
+  "torch": "2.13.0+cpu",
+  "transformers": "5.16.1",
+  "elapsed_seconds": 6.598101900017355,
+  "note": "Official Phi weights with project encode_pseudo; inference only. No CIRR metrics or training reproduction."
+}

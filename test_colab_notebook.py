@@ -2,6 +2,9 @@
 import ast
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from PIL import Image
 
 
 notebook_path = Path("notebooks/LinCIR_Colab.ipynb")
@@ -33,4 +36,33 @@ for cell in cells:
     if cell.get("cell_type") == "code":
         ast.parse("".join(cell.get("source", [])))
 
-print("PASS: notebook JSON, Python syntax, setup/checkpoint/eval/train flow")
+readiness = next("".join(cell["source"]) for cell in cells
+                 if "caption_file = CIRR_ROOT" in "".join(cell.get("source", [])))
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    captions = root / "cirr/captions/cap.rc2.val.json"
+    split = root / "cirr/image_splits/split.rc2.val.json"
+    for path in (captions, split):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    captions.write_text(json.dumps([{}] * 4181), encoding="utf-8")
+    # One image shared by the fixture's entries keeps this check small and offline.
+    split.write_text(json.dumps({str(i): "dev/example.png" for i in range(2297)}), encoding="utf-8")
+    namespace = {"CIRR_ROOT": root, "RUN_DIR": root, "json": json}
+    exec(readiness, namespace)
+    assert namespace["CIRR_READY"] is False, "Missing images must clear the readiness flag"
+    report = root / "cirr_readiness.json"
+    assert len(json.loads(report.read_text())["missing_images"]) == 2297
+    photo = root / "dev/example.png"
+    photo.parent.mkdir()
+    Image.new("RGB", (2, 2)).save(photo)
+    exec(readiness, namespace)
+    assert namespace["CIRR_READY"] is True
+    photo.write_bytes(b"broken image")
+    exec(readiness, namespace)
+    assert namespace["CIRR_READY"] is False, "Corrupt images must stop evaluation"
+    Image.new("RGB", (2, 2)).save(photo)
+    captions.write_text("[]", encoding="utf-8")
+    exec(readiness, namespace)
+    assert namespace["CIRR_READY"] is False, "A partial query set is not a complete baseline"
+
+print("PASS: notebook syntax/flow; CIRR missing, complete, corrupt, and partial-data guards")
